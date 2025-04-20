@@ -1,0 +1,307 @@
+import json
+import os
+from datetime import datetime
+
+from django.core.paginator import Paginator, EmptyPage
+from django.db import IntegrityError
+from django.db.models import Prefetch
+from django.shortcuts import get_object_or_404
+from django.utils.timezone import now
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework_jwt.settings import api_settings
+from rest_framework import viewsets, status
+from rest_framework.views import APIView
+
+from djangoAdmin import settings
+from apps.menu.models import SysRoleMenu, SysMenu, SysMenuSerializer
+from apps.role.models import SysRole, SysUserRole
+from apps.user.models import SysUser, SysUserSerializer
+
+
+class LoginView(APIView):
+    def post(self, request):
+        username = request.data.get('username')
+        password = request.data.get('password')
+
+        # 用户验证
+        try:
+            user = SysUser.objects.get(username=username, password=password)
+        except SysUser.DoesNotExist:
+            return Response({'code': 401, 'errorInfo': '用户名或密码错误'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        # 生成JWT
+        jwt_payload_handler = api_settings.JWT_PAYLOAD_HANDLER
+        jwt_encode_handler = api_settings.JWT_ENCODE_HANDLER
+        payload = jwt_payload_handler(user)
+        token = jwt_encode_handler(payload)
+
+        # 更新登录时间
+        user.login_date = now().date()
+        user.save()
+
+        # 获取角色信息
+        role_list = SysUserRole.objects.filter(user_id=user.id).values('role__id', 'role__name')
+        roles = ",".join([role['role__name'] for role in role_list])
+
+        # 获取所有原始菜单ID（不经过处理）
+        raw_menu_ids = set()
+        for role in SysUserRole.objects.filter(user=user).select_related('role'):
+            raw_menu_ids.update(
+                SysRoleMenu.objects.filter(role=role.role)
+                .values_list('menu_id', flat=True)
+            )
+
+        # 获取所有祖先菜单ID（包含路径上的所有父级）
+        def get_all_parents(menu_id, menu_map):
+            parents = set()
+            current_id = menu_id
+            while current_id:
+                menu = menu_map.get(current_id)
+                if not menu or not menu.parent_id:
+                    break
+                parents.add(menu.parent_id)
+                current_id = menu.parent_id
+            return parents
+
+        # 获取所有相关菜单对象（包括原始菜单及其祖先）
+        menu_map = SysMenu.objects.in_bulk(raw_menu_ids)
+        all_parent_ids = set()
+        for menu_id in raw_menu_ids:
+            all_parent_ids.update(get_all_parents(menu_id, menu_map))
+
+        # 合并最终需要的菜单ID（原始菜单 + 所有父级菜单）
+        final_menu_ids = raw_menu_ids.union(all_parent_ids)
+
+        # 查询菜单并动态过滤子菜单
+        menus = SysMenu.objects.filter(id__in=final_menu_ids).prefetch_related(
+            Prefetch('children',
+                     queryset=SysMenu.objects.filter(id__in=raw_menu_ids),  # 关键修改：只包含原始权限ID
+                     to_attr='filtered_children')
+        ).order_by('order_num')
+
+        # 自定义序列化逻辑
+        def build_menu_tree(menus):
+            menu_dict = {}
+            processed_ids = set()  # 新增：记录已处理过的菜单ID
+
+            # 第一轮：创建所有菜单项并收集父子关系
+            for menu in menus:
+                menu_data = SysMenuSerializer(menu).data
+                menu_data['children'] = []
+                menu_dict[menu.id] = menu_data
+
+            # 第二轮：精确构建树形结构
+            root_menus = []
+            for menu in menus:
+                menu_data = menu_dict[menu.id]
+
+                # 处理子菜单（仅添加实际有权限的）
+                valid_children = []
+                for child in menu.filtered_children:
+                    if child.id in raw_menu_ids and child.id in menu_dict:
+                        child_data = menu_dict[child.id]
+                        # 检查是否已经处理过该子菜单
+                        if child.id not in processed_ids:
+                            valid_children.append(child_data)
+                            processed_ids.add(child.id)
+
+                # 更新子菜单列表（保持顺序）
+                menu_data['children'] = sorted(
+                    valid_children,
+                    key=lambda x: x['order_num'] if x['order_num'] is not None else 0
+                )
+
+                # 挂载到父菜单（仅处理未挂载的）
+                if menu.parent_id and menu.parent_id in menu_dict:
+                    parent_data = menu_dict[menu.parent_id]
+                    # 检查是否已经包含当前菜单
+                    if not any(item['id'] == menu.id for item in parent_data['children']):
+                        parent_data['children'].append(menu_data)
+                else:
+                    # 仅当没有父菜单时才作为根节点
+                    if menu.id not in processed_ids:
+                        root_menus.append(menu_data)
+                        processed_ids.add(menu.id)
+
+            # 最终清理：确保子菜单不重复出现在根节点
+            return [m for m in root_menus if m['id'] in processed_ids]
+
+        menu_tree = build_menu_tree(menus)
+        return Response({
+            'code': 200,
+            'token': token,
+            'user': SysUserSerializer(user).data,
+            'info': '登录成功！',
+            'roles': roles,
+            'menuList': menu_tree
+        })
+
+
+class ImageView(APIView):
+    def post(self, request):
+        file = request.FILES.get('avatar')
+        if file:
+            file_name = file.name
+            suffix_name = file_name[file_name.rfind("."):]
+            new_file_name = datetime.now().strftime("%Y%m%d%H%M%S") + suffix_name
+            file_path = os.path.join(str(settings.MEDIA_ROOT), "userAvatar", new_file_name)
+            try:
+                with open(file_path, 'wb') as f:
+                    for chunk in file.chunks():
+                        f.write(chunk)
+                return Response({'code': 200, 'title': new_file_name})
+            except Exception as e:
+                return Response({'code': 500, 'errorInfo': '上传失败！'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'code': 500, 'errorInfo': '文件不存在！'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AvatarView(APIView):
+    def post(self, request):
+        data = request.data
+        obj_user = get_object_or_404(SysUser, id=data['id'])
+        obj_user.avatar = data['avatar']
+        obj_user.save()
+        return Response({'code': 200})
+
+
+class SysUserViewSet(viewsets.ModelViewSet):
+    queryset = SysUser.objects.all()
+    serializer_class = SysUserSerializer
+
+    def list(self, request, *args, **kwargs):
+        query = request.query_params.get('query', '')
+        page_num = int(request.query_params.get('pageNum', 1))
+        page_size = int(request.query_params.get('pageSize', 10))
+
+        page_num = max(1, page_num)
+        page_size = max(1, page_size)
+
+        queryset = self.get_queryset().filter(username__icontains=query).order_by('id')
+        paginator = Paginator(queryset, page_size)
+
+        # 检查请求的页码是否大于总页数
+        if page_num > paginator.num_pages:
+            page_num = paginator.num_pages
+
+        try:
+            user_list_page = paginator.page(page_num)
+            users = list(user_list_page.object_list.values())
+
+            user_ids = [user['id'] for user in users]
+            role_list = SysUserRole.objects.filter(user_id__in=user_ids).values('user_id', 'role__id', 'role__name')
+            role_dict = {user_id: [] for user_id in user_ids}
+            for role in role_list:
+                role_dict[role['user_id']].append({'id': role['role__id'], 'name': role['role__name']})
+
+            for user in users:
+                user['roleList'] = role_dict.get(user['id'], [])
+
+            return Response({
+                'code': 200,
+                'total': paginator.count,
+                'userList': users,
+            })
+        except EmptyPage:
+            return Response({'code': 404, 'errorInfo': '分页超出范围！'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'code': 500, 'errorInfo': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def partial_update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        old_password = request.data.get('oldPassword')
+        new_password = request.data.get('newPassword')
+
+        if instance.password != old_password:
+            return Response({'code': 500, 'errorInfo': '原密码错误！'}, status=status.HTTP_400_BAD_REQUEST)
+
+        instance.password = new_password
+        instance.update_time = now().date()
+        instance.save()
+        return Response({'code': 200})
+
+    def create(self, request, *args, **kwargs):
+        try:
+            request.data['create_time'] = now().date()
+            request.data['update_time'] = now().date()
+            return super().create(request, *args, **kwargs)
+        except IntegrityError:
+            return Response({'code': 400, 'errorInfo': '用户名已存在！'}, status=status.HTTP_400_BAD_REQUEST)
+
+    def update(self, request, *args, **kwargs):
+        try:
+            request.data['update_time'] = now().date()
+            return super().update(request, *args, **kwargs)
+        except IntegrityError:
+            return Response({'code': 400, 'errorInfo': '用户名已存在！'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(methods=['delete'], detail=False, url_path='batch-delete')
+    def batch_delete(self, request):
+        try:
+            id_list = json.loads(request.body.decode("utf-8"))
+            SysUserRole.objects.filter(user_id__in=id_list).delete()
+            SysUser.objects.filter(id__in=id_list).delete()
+            return Response({'code': 200, 'info': '删除成功！'})
+        except Exception as e:
+            return Response({'code': 500, 'errorInfo': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['patch'], url_path='assign-roles')
+    def assign_roles(self, request, pk=None):
+        data = json.loads(request.body.decode("utf-8"))
+        user_id = data.get('id')
+        role_ids = data.get('roleIds')
+
+        if not user_id:
+            return Response({'code': 400, 'info': '用户ID不能为空！'}, status=status.HTTP_400_BAD_REQUEST)
+        if not role_ids or not isinstance(role_ids, list):
+            return Response({'code': 400, 'info': '角色ID列表不能为空且必须是列表！'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = SysUser.objects.get(id=user_id)
+        except SysUser.DoesNotExist:
+            return Response({'code': 404, 'info': '用户不存在！'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            # 删除用户现有的角色关联
+            SysUserRole.objects.filter(user_id=user_id).delete()
+
+            # 创建新的角色关联
+            user_roles = [SysUserRole(user_id=user_id, role_id=role_id) for role_id in role_ids]
+            SysUserRole.objects.bulk_create(user_roles)
+
+            return Response({'code': 200, 'info': '角色分配成功！'})
+        except Exception as e:
+            return Response({'code': 500, 'info': f'分配角色时出错: {str(e)}'},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['patch'], url_path='reset-password')
+    def reset_password(self, request, pk=None):
+        user = self.get_object()
+        default_password = '123456'
+        try:
+            user.password = default_password
+            user.update_time = now().date()
+            user.save()
+            return Response({'code': 200, 'info': '密码重置成功！'})
+        except Exception as e:
+            return Response({'code': 500, 'info': f'重置密码时出错: {str(e)}'},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['patch'], url_path='change-status')
+    def change_status(self, request, pk=None):
+        user = self.get_object()
+        try:
+            # 获取前端传递的 status 参数
+            status = request.data.get('status')
+            if status is None:
+                return Response({'code': 400, 'info': 'status 参数不能为空！'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 将用户的状态设置为前端传递的值
+            user.status = status
+            user.update_time = now().date()
+            user.save()
+            return Response({'code': 200, 'info': '状态更新成功！', 'user': SysUserSerializer(user).data})
+        except Exception as e:
+            return Response({'code': 500, 'info': f'状态更新时出错: {str(e)}'},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
