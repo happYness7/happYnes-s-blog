@@ -1,8 +1,7 @@
 import json
 
-from django.core.paginator import Paginator, EmptyPage
+from django.core.paginator import EmptyPage
 from django.db import IntegrityError
-from django.shortcuts import render
 from django.utils.timezone import now
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -10,7 +9,7 @@ from rest_framework.response import Response
 
 from apps.menu.models import SysRoleMenu, SysMenu
 from apps.role.models import SysRole, SysRoleSerializer, SysUserRole
-from apps.user.models import SysUser
+from djangoAdmin.utils.pagination import paginate_queryset
 
 
 # Create your views here.
@@ -26,17 +25,11 @@ class SysRoleViewSet(viewsets.ModelViewSet):
         page_num = int(request.query_params.get('pageNum', 1))
         page_size = int(request.query_params.get('pageSize', 10))
 
-        page_num = max(1, page_num)
-        page_size = max(1, page_size)
-
         queryset = self.get_queryset().filter(name__icontains=query).order_by('id')
-        paginator = Paginator(queryset, page_size)
 
-        if page_num > paginator.num_pages:
-            page_num = paginator.num_pages
         try:
-            role_list_page = paginator.page(page_num)
-            roles = list(role_list_page.object_list.values())
+            page, total = paginate_queryset(queryset, page_num, page_size)
+            roles = list(page.object_list.values())
 
             role_ids = [role['id'] for role in roles]
 
@@ -56,7 +49,7 @@ class SysRoleViewSet(viewsets.ModelViewSet):
 
             return Response({
                 'code': 200,
-                'total': paginator.count,
+                'total': total,
                 'roleList': roles
             })
         except Exception as e:

@@ -1,8 +1,7 @@
 import json
 import os
 from datetime import datetime
-
-from django.core.paginator import Paginator, EmptyPage
+from djangoAdmin.utils.pagination import paginate_queryset
 from django.db import IntegrityError
 from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404
@@ -15,7 +14,7 @@ from rest_framework.views import APIView
 
 from djangoAdmin import settings
 from apps.menu.models import SysRoleMenu, SysMenu, SysMenuSerializer
-from apps.role.models import SysRole, SysUserRole
+from apps.role.models import SysUserRole
 from apps.user.models import SysUser, SysUserSerializer
 
 
@@ -52,23 +51,11 @@ class LoginView(APIView):
                 .values_list('menu_id', flat=True)
             )
 
-        # 获取所有祖先菜单ID（包含路径上的所有父级）
-        def get_all_parents(menu_id, menu_map):
-            parents = set()
-            current_id = menu_id
-            while current_id:
-                menu = menu_map.get(current_id)
-                if not menu or not menu.parent_id:
-                    break
-                parents.add(menu.parent_id)
-                current_id = menu.parent_id
-            return parents
-
         # 获取所有相关菜单对象（包括原始菜单及其祖先）
         menu_map = SysMenu.objects.in_bulk(raw_menu_ids)
         all_parent_ids = set()
         for menu_id in raw_menu_ids:
-            all_parent_ids.update(get_all_parents(menu_id, menu_map))
+            all_parent_ids.update(self.get_all_parents(menu_id, menu_map))
 
         # 合并最终需要的菜单ID（原始菜单 + 所有父级菜单）
         final_menu_ids = raw_menu_ids.union(all_parent_ids)
@@ -80,54 +67,7 @@ class LoginView(APIView):
                      to_attr='filtered_children')
         ).order_by('order_num')
 
-        # 自定义序列化逻辑
-        def build_menu_tree(menus):
-            menu_dict = {}
-            processed_ids = set()  # 新增：记录已处理过的菜单ID
-
-            # 第一轮：创建所有菜单项并收集父子关系
-            for menu in menus:
-                menu_data = SysMenuSerializer(menu).data
-                menu_data['children'] = []
-                menu_dict[menu.id] = menu_data
-
-            # 第二轮：精确构建树形结构
-            root_menus = []
-            for menu in menus:
-                menu_data = menu_dict[menu.id]
-
-                # 处理子菜单（仅添加实际有权限的）
-                valid_children = []
-                for child in menu.filtered_children:
-                    if child.id in raw_menu_ids and child.id in menu_dict:
-                        child_data = menu_dict[child.id]
-                        # 检查是否已经处理过该子菜单
-                        if child.id not in processed_ids:
-                            valid_children.append(child_data)
-                            processed_ids.add(child.id)
-
-                # 更新子菜单列表（保持顺序）
-                menu_data['children'] = sorted(
-                    valid_children,
-                    key=lambda x: x['order_num'] if x['order_num'] is not None else 0
-                )
-
-                # 挂载到父菜单（仅处理未挂载的）
-                if menu.parent_id and menu.parent_id in menu_dict:
-                    parent_data = menu_dict[menu.parent_id]
-                    # 检查是否已经包含当前菜单
-                    if not any(item['id'] == menu.id for item in parent_data['children']):
-                        parent_data['children'].append(menu_data)
-                else:
-                    # 仅当没有父菜单时才作为根节点
-                    if menu.id not in processed_ids:
-                        root_menus.append(menu_data)
-                        processed_ids.add(menu.id)
-
-            # 最终清理：确保子菜单不重复出现在根节点
-            return [m for m in root_menus if m['id'] in processed_ids]
-
-        menu_tree = build_menu_tree(menus)
+        menu_tree = self.build_menu_tree(menus)
         return Response({
             'code': 200,
             'token': token,
@@ -136,6 +76,51 @@ class LoginView(APIView):
             'roles': roles,
             'menuList': menu_tree
         })
+
+        # 获取所有祖先菜单ID（包含路径上的所有父级）
+
+    def get_all_parents(self, menu_id, menu_map):
+        parents = set()
+        current_id = menu_id
+        while current_id:
+            menu = menu_map.get(current_id)
+            if not menu or not menu.parent_id:
+                break
+            parents.add(menu.parent_id)
+            current_id = menu.parent_id
+        return parents
+
+    def build_menu_tree(self, menus):
+        menu_dict = {}
+        processed_ids = set()
+
+        # 第一次遍历：创建所有节点
+        sorted_menus = sorted(menus, key=lambda x: x.order_num)
+        for menu in sorted_menus:
+            menu_data = SysMenuSerializer(menu).data
+            menu_data['children'] = []
+            menu_dict[menu.id] = menu_data
+
+        # 第二次遍历：构建树结构
+        root_menus = []
+        for menu in sorted_menus:
+            menu_data = menu_dict[menu.id]
+
+            # 处理父级关系
+            if menu.parent and menu.parent.id in menu_dict:
+                parent_data = menu_dict[menu.parent.id]
+                # 检查是否重复添加
+                if menu_data not in parent_data['children']:
+                    parent_data['children'].append(menu_data)
+                    processed_ids.add(menu.id)
+
+            # 仅当没有父级或父级不存在时作为根节点
+            if menu.id not in processed_ids:
+                root_menus.append(menu_data)
+                processed_ids.add(menu.id)
+
+        # 按order_num排序根节点
+        return sorted(root_menus, key=lambda x: x['order_num'])
 
 
 class ImageView(APIView):
@@ -171,22 +156,14 @@ class SysUserViewSet(viewsets.ModelViewSet):
 
     def list(self, request, *args, **kwargs):
         query = request.query_params.get('query', '')
-        page_num = int(request.query_params.get('pageNum', 1))
-        page_size = int(request.query_params.get('pageSize', 10))
-
-        page_num = max(1, page_num)
-        page_size = max(1, page_size)
+        page_num = request.query_params.get('pageNum', 1)
+        page_size = request.query_params.get('pageSize', 10)
 
         queryset = self.get_queryset().filter(username__icontains=query).order_by('id')
-        paginator = Paginator(queryset, page_size)
-
-        # 检查请求的页码是否大于总页数
-        if page_num > paginator.num_pages:
-            page_num = paginator.num_pages
 
         try:
-            user_list_page = paginator.page(page_num)
-            users = list(user_list_page.object_list.values())
+            page, total = paginate_queryset(queryset, page_num, page_size)
+            users = list(page.object_list.values())
 
             user_ids = [user['id'] for user in users]
             role_list = SysUserRole.objects.filter(user_id__in=user_ids).values('user_id', 'role__id', 'role__name')
@@ -199,11 +176,11 @@ class SysUserViewSet(viewsets.ModelViewSet):
 
             return Response({
                 'code': 200,
-                'total': paginator.count,
+                'total': total,
                 'userList': users,
             })
-        except EmptyPage:
-            return Response({'code': 404, 'errorInfo': '分页超出范围！'}, status=status.HTTP_404_NOT_FOUND)
+        except ValueError as e:
+            return Response({'code': 404, 'errorInfo': str(e)}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({'code': 500, 'errorInfo': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
