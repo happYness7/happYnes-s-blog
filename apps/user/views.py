@@ -222,6 +222,15 @@ class SysUserViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'code': 500, 'errorInfo': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    def destroy(self, request, *args, **kwargs):
+        try:
+            id = kwargs.get('pk')
+            SysUserRole.objects.filter(user_id=id).delete()
+            SysUser.objects.filter(id=id).delete()
+            return Response({'code': 200, 'info': '删除成功！'})
+        except Exception as e:
+            return Response({'code': 500, 'errorInfo': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
     @action(detail=True, methods=['patch'], url_path='assign-roles')
     def assign_roles(self, request, pk=None):
         data = json.loads(request.body.decode("utf-8"))

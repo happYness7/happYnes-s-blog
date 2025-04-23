@@ -67,6 +67,7 @@ class SysRoleViewSet(viewsets.ModelViewSet):
     def batch_delete(self, request):
         try:
             id_list = json.loads(request.body.decode("utf-8"))
+            SysRoleMenu.objects.filter(role_id__in=id_list).delete()
             SysUserRole.objects.filter(role_id__in=id_list).delete()
             SysRole.objects.filter(id__in=id_list).delete()
             return Response({'code': 200, 'info': '删除成功！'})
@@ -76,6 +77,7 @@ class SysRoleViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         try:
             id = kwargs.get('pk')
+            SysRoleMenu.objects.filter(role_id=id).delete()
             SysUserRole.objects.filter(role_id=id).delete()
             SysRole.objects.filter(id=id).delete()
             return Response({'code': 200, 'info': '删除成功！'})
