@@ -145,3 +145,13 @@ JWT_AUTH = {
     'JWT_EXPIRATION_DELTA': datetime.timedelta(hours=3),  # 设置有效时间为 3 小时
     'JWT_REFRESH_EXPIRATION_DELTA': datetime.timedelta(days=7),  # 设置刷新有效时间为 7 天
 }
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://127.0.0.1:6379/1",
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        }
+    }
+}

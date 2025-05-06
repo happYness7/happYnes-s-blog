@@ -8,7 +8,7 @@ from rest_framework_jwt.settings import api_settings
 
 class JwtAuthenticationMiddleware(MiddlewareMixin):
     def process_request(self, request):
-        white_list = ["/user/login/"]
+        white_list = ["/user/login/", "/user/captcha/"]
         path = request.path
         if path not in white_list and not path.startswith("/media"):
             token = request.META.get('HTTP_AUTHORIZATION')

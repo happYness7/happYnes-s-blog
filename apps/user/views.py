@@ -1,6 +1,15 @@
+import base64
+import hashlib
 import json
 import os
+import secrets
+import uuid
 from datetime import datetime
+
+from captcha.image import ImageCaptcha
+from django.core.cache import cache
+from django.http import JsonResponse
+
 from djangoAdmin.utils.pagination import paginate_queryset
 from django.db import IntegrityError
 from django.db.models import Prefetch
@@ -18,14 +27,75 @@ from apps.role.models import SysUserRole
 from apps.user.models import SysUser, SysUserSerializer
 
 
+class CaptchaView(APIView):
+    # 验证码字符集（排除易混淆字符）
+    CAPTCHA_CHARS = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789'
+    CAPTCHA_LENGTH = 4  # 验证码长度
+    TIMEOUT = 300  # 验证码有效期（秒）
+
+    def get(self, request):
+        try:
+            # 生成随机验证码（使用安全随机数）
+            captcha_text = ''.join(secrets.choice(self.CAPTCHA_CHARS) for _ in range(self.CAPTCHA_LENGTH))
+            # 生成验证码图片
+            image = ImageCaptcha()
+            image_data = image.generate(captcha_text)
+
+            # 转换为Base64字符串
+            base64_str = base64.b64encode(image_data.getvalue()).decode()
+            # 生成唯一令牌并存储验证码
+            captcha_token = str(uuid.uuid4())
+            cache.set(f'captcha_{captcha_token}', captcha_text, timeout=self.TIMEOUT)
+
+            return JsonResponse({
+                'code': 200,
+                'base64str': f'data:image/png;base64,{base64_str}',
+                'captcha_token': captcha_token
+            })
+
+        except Exception as e:
+            return JsonResponse({
+                'code': 500,
+                'errorInfo': '验证码生成失败'
+            }, status=500)
+
+
 class LoginView(APIView):
+    CAPTCHA_TIMEOUT = 300
+
     def post(self, request):
         username = request.data.get('username')
         password = request.data.get('password')
+        captcha_code = request.data.get('captcha')
+        captcha_token = request.data.get('captcha_token')
+        # 参数校验
+        if not all([captcha_code, captcha_token]):
+            return Response({'code': 400, 'errorInfo': '验证码参数缺失'},
+                            status=status.HTTP_400_BAD_REQUEST)
 
+        # 获取缓存验证码
+        try:
+            cache_key = f'captcha_{captcha_token}'
+            real_captcha = cache.get(cache_key)
+
+            # 立即删除已使用的验证码（无论对错）
+            if real_captcha:
+                cache.delete(cache_key)
+
+            if not real_captcha:
+                return Response({'code': 400, 'errorInfo': '验证码已过期'},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            # 不区分大小写校验
+            if real_captcha.lower() != captcha_code.lower():
+                return Response({'code': 400, 'errorInfo': '验证码错误'},
+                                status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({'code': 500, 'errorInfo': '验证服务异常'},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         # 用户验证
         try:
-            user = SysUser.objects.get(username=username, password=password)
+            user = SysUser.objects.get(username=username, password=hashlib.md5(password.encode()).hexdigest())
         except SysUser.DoesNotExist:
             return Response({'code': 401, 'errorInfo': '用户名或密码错误'}, status=status.HTTP_401_UNAUTHORIZED)
 
@@ -189,10 +259,10 @@ class SysUserViewSet(viewsets.ModelViewSet):
         old_password = request.data.get('oldPassword')
         new_password = request.data.get('newPassword')
 
-        if instance.password != old_password:
+        if instance.password != hashlib.md5(old_password.encode()).hexdigest():
             return Response({'code': 500, 'errorInfo': '原密码错误！'}, status=status.HTTP_400_BAD_REQUEST)
 
-        instance.password = new_password
+        instance.password = hashlib.md5(new_password.encode()).hexdigest()
         instance.update_time = now().date()
         instance.save()
         return Response({'code': 200})
@@ -264,7 +334,7 @@ class SysUserViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['patch'], url_path='reset-password')
     def reset_password(self, request, pk=None):
         user = self.get_object()
-        default_password = '123456'
+        default_password = hashlib.md5("123456".encode()).hexdigest()
         try:
             user.password = default_password
             user.update_time = now().date()
@@ -279,12 +349,12 @@ class SysUserViewSet(viewsets.ModelViewSet):
         user = self.get_object()
         try:
             # 获取前端传递的 status 参数
-            status = request.data.get('status')
-            if status is None:
+            status_data = request.data.get('status')
+            if status_data is None:
                 return Response({'code': 400, 'info': 'status 参数不能为空！'}, status=status.HTTP_400_BAD_REQUEST)
 
             # 将用户的状态设置为前端传递的值
-            user.status = status
+            user.status = status_data
             user.update_time = now().date()
             user.save()
             return Response({'code': 200, 'info': '状态更新成功！', 'user': SysUserSerializer(user).data})

@@ -6,7 +6,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from apps.menu.models import SysMenu, SysMenuSerializer
+from apps.menu.models import SysMenu, SysMenuSerializer, SysRoleMenu
 from djangoAdmin.utils.pagination import paginate_queryset
 
 
@@ -117,6 +117,7 @@ class SysMenuViewSet(viewsets.ModelViewSet):
                 queue.extend(list(current_menu.children.all()))
 
             # 2. 批量删除（单个SQL操作）
+            SysRoleMenu.objects.filter(menu_id__in=delete_ids).delete()
             SysMenu.objects.filter(id__in=delete_ids).delete()
 
             return Response({'code': 200, 'info': '删除成功！'})
