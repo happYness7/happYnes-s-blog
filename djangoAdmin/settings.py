@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 from pathlib import Path
 import datetime
+import boto3
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -40,7 +41,8 @@ INSTALLED_APPS = [
     "corsheaders",
     "apps.user.apps.UserConfig",
     "apps.role.apps.RoleConfig",
-    "apps.menu.apps.MenuConfig"
+    "apps.menu.apps.MenuConfig",
+    "apps.blog.apps.BlogConfig"
 ]
 
 MIDDLEWARE = [
@@ -96,6 +98,9 @@ DATABASES = {
         "PASSWORD": "03101259",
         "HOST": "127.0.0.1",
         "PORT": 3306,
+        'OPTIONS': {
+            'charset': 'utf8mb4',  # 关键配置
+        },
     }
 }
 
@@ -122,7 +127,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = "UTC"
+TIME_ZONE = 'Asia/Shanghai'
 
 USE_I18N = True
 
@@ -155,3 +160,18 @@ CACHES = {
         }
     }
 }
+
+# Cloudflare R2 配置
+CLOUDFLARE_R2_ENDPOINT = 'https://87e08f4273369a7566dd5e8aa5efbfea.r2.cloudflarestorage.com/blog'
+CLOUDFLARE_R2_ACCESS_KEY = 'dd79a6efb2935f1a19d2f0c828575d9f'
+CLOUDFLARE_R2_SECRET_KEY = '49ab55cb6b7e47fbf6304a0988c818b4cf543ebd2585b3018c0f58835977dc3c'
+CLOUDFLARE_R2_BUCKET_NAME = 'blog'
+CLOUDFLARE_R2_PUBLIC_URL = 'https://pub-d470eef1ae124f929afa0d8350e779c7.r2.dev'
+
+# 初始化 boto3 客户端
+s3_client = boto3.client(
+    's3',
+    endpoint_url=CLOUDFLARE_R2_ENDPOINT,
+    aws_access_key_id=CLOUDFLARE_R2_ACCESS_KEY,
+    aws_secret_access_key=CLOUDFLARE_R2_SECRET_KEY
+)

@@ -1,0 +1,37 @@
+# Python 编译文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 虚拟环境
+venv/
+env/
+.venv/
+virtualenv/
+
+# Django 相关
+*.sqlite3
+*.log
+db.sqlite3
+
+# 敏感文件
+.env
+.secrets
+*.key
+
+# 开发环境文件
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 静态文件 (若使用 collectstatic)
+staticfiles/
+
+# 媒体文件
+media/
+
+# 单元测试输出
+.coverage
+htmlcov/

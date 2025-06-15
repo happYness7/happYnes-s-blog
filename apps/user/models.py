@@ -1,13 +1,15 @@
 from django.db import models
 from rest_framework import serializers
+from django.contrib.auth.models import AbstractUser
 
 
 # Create your models here.
 class SysUser(models.Model):
     id = models.AutoField(primary_key=True)
     username = models.CharField(max_length=100, unique=True, verbose_name="用户名")
-    password = models.CharField(max_length=100, verbose_name="密码")
-    avatar = models.CharField(max_length=255, null=True, verbose_name="头像", default="default.jpg")
+    password = models.CharField(max_length=100, verbose_name="密码", null=True)
+    avatar = models.CharField(max_length=255, null=True, verbose_name="头像",
+                              default="https://pub-d470eef1ae124f929afa0d8350e779c7.r2.dev/blog/configs/057c5dd3305a41278d74a7a5c7dffeb5.jpg")
     email = models.EmailField(max_length=100, null=True, verbose_name="邮箱")
     phonenumber = models.CharField(max_length=11, null=True, verbose_name="手机号")
     login_date = models.DateField(null=True, verbose_name="最后登录时间")

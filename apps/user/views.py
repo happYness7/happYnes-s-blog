@@ -97,7 +97,7 @@ class LoginView(APIView):
         try:
             user = SysUser.objects.get(username=username, password=hashlib.md5(password.encode()).hexdigest())
         except SysUser.DoesNotExist:
-            return Response({'code': 401, 'errorInfo': '用户名或密码错误'}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({'code': 400, 'errorInfo': '用户名或密码错误'}, status=status.HTTP_400_BAD_REQUEST)
 
         # 生成JWT
         jwt_payload_handler = api_settings.JWT_PAYLOAD_HANDLER
@@ -193,22 +193,78 @@ class LoginView(APIView):
         return sorted(root_menus, key=lambda x: x['order_num'])
 
 
-class ImageView(APIView):
+class RegisterView(APIView):
     def post(self, request):
-        file = request.FILES.get('avatar')
-        if file:
-            file_name = file.name
-            suffix_name = file_name[file_name.rfind("."):]
-            new_file_name = datetime.now().strftime("%Y%m%d%H%M%S") + suffix_name
-            file_path = os.path.join(str(settings.MEDIA_ROOT), "userAvatar", new_file_name)
+        # 获取请求参数
+        username = request.data.get('username')
+        password = request.data.get('password')
+        captcha_code = request.data.get('captcha')
+        captcha_token = request.data.get('captcha_token')
+
+        # 基础参数校验
+        required_fields = ['username', 'password', 'captcha_code', 'captcha_token']
+        if not all([username, password, captcha_code, captcha_token]):
+            return Response({'code': 400, 'errorInfo': '缺少必要参数'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        # 验证码校验逻辑
+        try:
+            cache_key = f'captcha_{captcha_token}'
+            real_captcha = cache.get(cache_key)
+
+            # 无论验证结果如何都删除已使用的验证码
+            if real_captcha:
+                cache.delete(cache_key)
+
+            if not real_captcha:
+                return Response({'code': 400, 'errorInfo': '验证码已过期'},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            if real_captcha.lower() != captcha_code.lower():
+                return Response({'code': 400, 'errorInfo': '验证码错误'},
+                                status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({'code': 500, 'errorInfo': '验证服务异常'},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        # 创建用户
+        try:
+            # 检查用户名唯一性
+            if SysUser.objects.filter(username=username).exists():
+                return Response({'code': 400, 'errorInfo': '用户名已存在'},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            # 创建用户记录
+            new_user = SysUser.objects.create(
+                username=username,
+                password=hashlib.md5(password.encode()).hexdigest(),
+                status=0,  # 默认状态为正常
+                create_time=now().date(),
+                update_time=now().date()
+            )
+
+            # ✅ 新增角色分配逻辑
             try:
-                with open(file_path, 'wb') as f:
-                    for chunk in file.chunks():
-                        f.write(chunk)
-                return Response({'code': 200, 'title': new_file_name})
-            except Exception as e:
-                return Response({'code': 500, 'errorInfo': '上传失败！'}, status=status.HTTP_400_BAD_REQUEST)
-        return Response({'code': 500, 'errorInfo': '文件不存在！'}, status=status.HTTP_400_BAD_REQUEST)
+                # 自动分配角色ID为2
+                SysUserRole.objects.create(
+                    user_id=new_user.id,
+                    role_id=2  # 根据你的实际角色ID调整
+                )
+            except Exception as role_error:
+                # 如果角色分配失败，回滚用户创建
+                new_user.delete()
+                return Response({'code': 500, 'errorInfo': f'角色分配失败: {str(role_error)}'},
+                                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            return Response({
+                'code': 200,
+                'info': '注册成功'
+            })
+
+        except IntegrityError:
+            return Response({'code': 500, 'errorInfo': '用户创建失败'},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            return Response({'code': 500, 'errorInfo': str(e)},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class AvatarView(APIView):

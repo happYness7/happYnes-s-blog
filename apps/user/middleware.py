@@ -8,18 +8,31 @@ from rest_framework_jwt.settings import api_settings
 
 class JwtAuthenticationMiddleware(MiddlewareMixin):
     def process_request(self, request):
-        white_list = ["/user/login/", "/user/captcha/"]
+        white_list = [
+            "/user/login/",
+            "/user/register/",
+            "/user/captcha/",
+            "/blog/",  # 所有/blog/前缀的路由
+            "/media/",  # 媒体文件
+            "/statistics/",
+        ]
         path = request.path
-        if path not in white_list and not path.startswith("/media"):
-            token = request.META.get('HTTP_AUTHORIZATION')
-            try:
-                jwt_decode_handler = api_settings.JWT_DECODE_HANDLER
-                jwt_decode_handler(token)
-            except ExpiredSignatureError:
-                return JsonResponse({'code': 401, 'errorInfo': 'Token过期，请重新登录！'}, status=401)
-            except InvalidTokenError:
-                return JsonResponse({'code': 401, 'errorInfo': 'Token验证失败！'}, status=401)
-            except PyJWTError:
-                return JsonResponse({'code': 500, 'errorInfo': 'Token验证异常！'}, status=500)
-        else:
+
+        # 检查是否在白名单 (使用startswith匹配前缀)
+        if any(path.startswith(white_path) for white_path in white_list):
             return None
+
+        # Token验证逻辑
+        token = request.META.get('HTTP_AUTHORIZATION')
+        if not token:
+            return JsonResponse({'code': 401, 'errorInfo': '缺少Token'}, status=401)
+
+        try:
+            jwt_decode_handler = api_settings.JWT_DECODE_HANDLER
+            jwt_decode_handler(token)
+        except ExpiredSignatureError:
+            return JsonResponse({'code': 401, 'errorInfo': 'Token过期'}, status=401)
+        except InvalidTokenError:
+            return JsonResponse({'code': 401, 'errorInfo': 'Token无效'}, status=401)
+        except Exception as e:
+            return JsonResponse({'code': 500, 'errorInfo': f'验证异常: {str(e)}'}, status=500)

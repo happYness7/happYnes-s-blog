@@ -20,11 +20,16 @@ from django.urls import path, include, re_path
 from django.views.static import serve
 
 from djangoAdmin import settings
+from djangoAdmin.utils.views import StatisticsView, ImageUploadView
 
 urlpatterns = [
     #    path("admin/", admin.site.urls),
     path('user/', include('apps.user.urls')),
     path('role/', include('apps.role.urls')),
     path('menu/', include('apps.menu.urls')),
+    path('blog/', include('apps.blog.urls')),
+    path('statistics/', StatisticsView.as_view(), name='statistics'),
+    path('upload-image/', ImageUploadView.as_view(), name='upload-image'),
+
     re_path('media/(?P<path>.*)', serve, {'document_root': settings.MEDIA_ROOT}, name='media')
 ]
