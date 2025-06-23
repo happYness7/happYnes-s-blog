@@ -9,12 +9,12 @@ from rest_framework_jwt.settings import api_settings
 class JwtAuthenticationMiddleware(MiddlewareMixin):
     def process_request(self, request):
         white_list = [
-            "/user/login/",
-            "/user/register/",
-            "/user/captcha/",
-            "/blog/",  # 所有/blog/前缀的路由
-            "/media/",  # 媒体文件
-            "/statistics/",
+            "/api/user/login/",
+            "/api/user/register/",
+            "/api/user/captcha/",
+            "/api/blog/",  # 所有/blog/前缀的路由
+            "/api/media/",  # 媒体文件
+            "/api/statistics/",
         ]
         path = request.path
 

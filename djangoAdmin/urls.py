@@ -24,12 +24,12 @@ from djangoAdmin.utils.views import StatisticsView, ImageUploadView
 
 urlpatterns = [
     #    path("admin/", admin.site.urls),
-    path('user/', include('apps.user.urls')),
-    path('role/', include('apps.role.urls')),
-    path('menu/', include('apps.menu.urls')),
-    path('blog/', include('apps.blog.urls')),
-    path('statistics/', StatisticsView.as_view(), name='statistics'),
-    path('upload-image/', ImageUploadView.as_view(), name='upload-image'),
+    path('api/user/', include('apps.user.urls')),
+    path('api/role/', include('apps.role.urls')),
+    path('api/menu/', include('apps.menu.urls')),
+    path('api/blog/', include('apps.blog.urls')),
+    path('api/statistics/', StatisticsView.as_view(), name='statistics'),
+    path('api/upload-image/', ImageUploadView.as_view(), name='upload-image'),
 
-    re_path('media/(?P<path>.*)', serve, {'document_root': settings.MEDIA_ROOT}, name='media')
+    re_path('api/media/(?P<path>.*)', serve, {'document_root': settings.MEDIA_ROOT}, name='media')
 ]
